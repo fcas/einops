@@ -1,10 +1,11 @@
-Einops tutorials cover multiple einops usages (and you'd better first follow tutorials), 
-but it can also help to see einops in action.
+## Tools for einops users
 
-## Selected projects
+- [Ein Color](https://marketplace.visualstudio.com/items?itemName=MarcinJachmann.vscode-eincolor) — a VS Code extension to color axes in einops/einsum patterns
+- Sonar codechecker provides a [rule](https://rules.sonarsource.com/python/RSPEC-6984/) to statically check einops patterns: 
 
-Here are some open-source projects that can teach how to leverage einops for your problems
+## Selected projects implemented with einops
 
+Einops tutorials cover many common usages (cover tutorials first!), but it is also useful to see real projects that apply einops in practice. The projects below illustrate how einops can simplify code in various domains.
 
 - [@lucidrains](https://github.com/lucidrains) has a dramatic [collection of vision transformers](https://github.com/lucidrains/vit-pytorch)
     - there is a plenty of good examples how to use einops efficiently in your projects
@@ -16,7 +17,7 @@ Here are some open-source projects that can teach how to leverage einops for you
 
 
 - capsule networks (aka capsnets) [implemented in einops](https://github.com/arogozhnikov/readable_capsnet)
-    - blazingly fast, concise (3-10 times less code), and memory efficient (3 times lower memory consumption) capsule networks, written with einops  
+    - this implementation is blazingly fast, concise (3-10 times less code), and memory efficient
 
 
 - [NuX](https://github.com/Information-Fusion-Lab-Umass/NuX) — normalizing flows in Jax
@@ -27,8 +28,8 @@ Here are some open-source projects that can teach how to leverage einops for you
   and [TimeSFormer](https://github.com/lucidrains/TimeSformer-pytorch) implementations
 
 
-- For protein folding, see [implementation](https://github.com/lucidrains/invariant-point-attention)
-  of invariant point attention from alphafold 2
+- For protein folding, see [alphafold3-pytorch](https://github.com/lucidrains/alphafold3-pytorch) and [implementation](https://github.com/lucidrains/invariant-point-attention) of invariant point attention from AlphaFold 2
+
 
 ## Community introductions to einops
 
@@ -50,35 +51,15 @@ ML TLDR thread on einops:
 Book "Deep Reinforcement Learning in Action" by Brandon Brown & Alexander Zai
 contains an introduction into einops in chapter 10.
 
-[comment]: <> (MLP mixer introduction)
-[comment]: <> (https://www.youtube.com/watch?v=HqytB2GUbHA)
-
-## Other einops-based projects worth looking at:
-
-(ordered randomly)
-
-- <https://github.com/The-AI-Summer/self-attention-cv>
-- <https://github.com/lucidrains/perceiver-pytorch>
-- <https://github.com/hila-chefer/Transformer-Explainability>
-- [https://github.com/microsoft/CvT](https://github.com/microsoft/CvT/blob/4cedb05b343e13ab08c0a29c5166b6e94c751112/lib/models/cls_cvt.py)
-- <https://github.com/lucidrains/g-mlp-gpt>
-- <https://github.com/zju3dv/LoFTR>
-- <https://github.com/WangFeng18/Swin-Transformer>
-- <https://github.com/kwea123/CasMVSNet_pl>
-- <https://github.com/kakao/DAFT>
-- <https://github.com/lucidrains/multistream-transformers>
-- <https://github.com/poets-ai/elegy>
-- <https://github.com/lucidrains/ponder-transformer>
-- <https://github.com/isaaccorley/torchrs>
-- <https://github.com/microsoft/esvit>
-- <https://github.com/zyddnys/manga-image-translator>
-- <https://github.com/google/jax-cfd>
 
 
-## Related projects:
+## Related projects
 
-- [numpy.einsum](https://numpy.org/doc/stable/reference/generated/numpy.einsum.html) &mdash; grand-dad of einops, this operation is now available in all modern DL frameworks 
-- einops in Rust language <https://docs.rs/einops/0.1.0/einops>
+- [numpy.einsum](https://numpy.org/doc/stable/reference/generated/numpy.einsum.html) &mdash; grand-dad of einops, this operation is now available in all mainstream DL frameworks 
+- einops in Rust language: <https://docs.rs/einops/0.1.0/einops>
 - einops in C++ for torch: <https://github.com/dorpxam/einops-cpp>
-- tensorcast in Julia language <https://juliahub.com/ui/Packages/TensorCast>
+- tensorcast in Julia language: <https://juliahub.com/ui/Packages/TensorCast>
+- one-to-one einops implementation in Julia language: <https://murrellgroup.github.io/Einops.jl/stable/>
+- einops in R language: <https://qile0317.github.io/einops/>
 - for those chasing an extreme compactness of API, <https://github.com/cgarciae/einop> provides 'one op', as the name suggests
+- <https://github.com/fferflo/einx> goes in opposite direction and creates einops-style operation for anything

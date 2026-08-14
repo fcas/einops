@@ -1,7 +1,7 @@
 import pytest
 
 from einops import EinopsError
-from einops.parsing import ParsedExpression, AnonymousAxis, _ellipsis
+from einops.parsing import AnonymousAxis, ParsedExpression, _ellipsis
 
 __author__ = "Alex Rogozhnikov"
 
@@ -14,10 +14,14 @@ class AnonymousAxisPlaceholder:
     def __eq__(self, other):
         return isinstance(other, AnonymousAxis) and self.value == other.value
 
+    def __hash__(self):
+        raise RuntimeError("<explicitly not supported>")
+
 
 def test_anonymous_axes():
-    a, b = AnonymousAxis("2"), AnonymousAxis("2")
+    a, b = AnonymousAxis(2), AnonymousAxis(2)
     assert a != b
+    assert hash(a) != hash(b), "this test may fail once in a lifetime"
     c, d = AnonymousAxisPlaceholder(2), AnonymousAxisPlaceholder(3)
     assert a == c and b == c
     assert a != d and b != d
@@ -100,13 +104,15 @@ def test_parse_expression():
     aap = AnonymousAxisPlaceholder
 
     parsed = ParsedExpression("5 (3 4)")
-    assert len(parsed.identifiers) == 3 and {i.value for i in parsed.identifiers} == {3, 4, 5}
+    assert len(parsed.identifiers) == 3
+    assert {i.value for i in parsed.identifiers} == {3, 4, 5}  # type: ignore
     assert parsed.composition == [[aap(5)], [aap(3), aap(4)]]
     assert parsed.has_non_unitary_anonymous_axes
     assert not parsed.has_ellipsis
 
     parsed = ParsedExpression("5 1 (1 4) 1")
-    assert len(parsed.identifiers) == 2 and {i.value for i in parsed.identifiers} == {4, 5}
+    assert len(parsed.identifiers) == 2
+    assert {i.value for i in parsed.identifiers} == {4, 5}  # type: ignore
     assert parsed.composition == [[aap(5)], [], [aap(4)], []]
 
     parsed = ParsedExpression("name1 ... a1 12 (name2 14)")

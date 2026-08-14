@@ -2,20 +2,32 @@ import functools
 import itertools
 import string
 import typing
-from collections import OrderedDict
-from typing import Set, Tuple, List, Dict, Union, Callable, Optional, TypeVar, cast, Any
-
-if typing.TYPE_CHECKING:
-    # for docstrings in pycharm
-    import numpy as np  # noqa E401
+from typing import Any, Protocol, TypeAlias, TypeVar, cast
 
 from . import EinopsError
 from ._backends import get_backend
-from .parsing import ParsedExpression, _ellipsis, AnonymousAxis
+from .parsing import AnonymousAxis, ParsedExpression, _Ellipsis, _ellipsis
 
-Tensor = TypeVar("Tensor")
-ReductionCallable = Callable[[Tensor, Tuple[int, ...]], Tensor]
-Reduction = Union[str, ReductionCallable]
+
+# typing helper, allows not using overloads
+class _TensorLike(Protocol):
+    @property
+    def shape(self, /) -> typing.Any: ...
+    def __getitem__(self, arg) -> typing.Any: ...
+
+
+Tensor = TypeVar("Tensor", bound=_TensorLike)
+
+
+class ReductionCallable(Protocol):
+    def __call__(self, tensor: Tensor, axes: tuple[int, ...], /) -> Tensor: ...
+    # demand hashability for lru_caching
+    def __hash__(self) -> int: ...
+
+
+Reduction = str | ReductionCallable
+Size: TypeAlias = typing.Any
+
 
 _reductions = ("min", "max", "sum", "mean", "prod", "any", "all")
 
@@ -25,7 +37,7 @@ _unknown_axis_length = -999999
 _expected_axis_length = -99999
 
 
-def _product(sequence: List[int]) -> int:
+def _product(sequence: list[int]) -> int:
     """minimalistic product that works both with numbers and symbols. Supports empty lists"""
     result = 1
     for element in sequence:
@@ -33,7 +45,7 @@ def _product(sequence: List[int]) -> int:
     return result
 
 
-def _reduce_axes(tensor, reduction_type: Reduction, reduced_axes: List[int], backend):
+def _reduce_axes(tensor, reduction_type: Reduction, reduced_axes: list[int], backend):
     if callable(reduction_type):
         # custom callable
         return reduction_type(tensor, tuple(reduced_axes))
@@ -63,7 +75,7 @@ def _optimize_transformation(init_shapes, reduced_axes, axes_reordering, final_s
 
     # removing axes that are moved together during reshape
     def build_mapping():
-        init_to_final = {}
+        init_to_final: dict[int, None | int] = {}
         for axis in range(len(init_shapes)):
             if axis in reduced_axes:
                 init_to_final[axis] = None
@@ -101,13 +113,14 @@ def _optimize_transformation(init_shapes, reduced_axes, axes_reordering, final_s
     return init_shapes, reduced_axes, axes_reordering, final_shapes
 
 
-CookedRecipe = Tuple[Optional[List[int]], Optional[List[int]], List[int], Dict[int, int], Optional[List[int]], int]
+CookedRecipe: TypeAlias = tuple[list[int] | None, list[int] | None, list[int], dict[int, int], list[int] | None, int]
+
 
 # Actual type is tuple[tuple[str, int], ...]
 # However torch.jit.script does not "understand" the correct type,
 # and torch_specific will use list version.
-HashableAxesLengths = Tuple[Tuple[str, int], ...]
-FakeHashableAxesLengths = List[Tuple[str, int]]
+HashableAxesLengths: TypeAlias = tuple[tuple[str, int], ...]
+FakeHashableAxesLengths: TypeAlias = list[tuple[str, int]]
 
 
 class TransformRecipe:
@@ -124,35 +137,35 @@ class TransformRecipe:
         # list of sizes (or just sizes) for elementary axes as they appear in left expression.
         # this is what (after computing unknown parts) will be a shape after first transposition.
         # This does not include any ellipsis dimensions.
-        elementary_axes_lengths: List[int],
+        elementary_axes_lengths: list[int],
         # if additional axes are provided, they should be set in prev array
         # This shows mapping from name to position
-        axis_name2elementary_axis: Dict[str, int],
+        axis_name2elementary_axis: dict[str, int],
         # each dimension in input can help to reconstruct length of one elementary axis
         # or verify one of dimensions. Each element points to element of elementary_axes_lengths.
-        input_composition_known_unknown: List[Tuple[List[int], List[int]]],
+        input_composition_known_unknown: list[tuple[list[int], list[int]]],
         # permutation applied to elementary axes, if ellipsis is absent
-        axes_permutation: List[int],
+        axes_permutation: list[int],
         # permutation puts reduced axes in the end, we only need to know the first position.
         first_reduced_axis: int,
         # at which positions which of elementary axes should appear. Axis position -> axis index.
-        added_axes: Dict[int, int],
+        added_axes: dict[int, int],
         # ids of axes as they appear in result, again pointers to elementary_axes_lengths,
         # only used to infer result dimensions
-        output_composite_axes: List[List[int]],
+        output_composite_axes: list[list[int]],
     ):
-        self.elementary_axes_lengths: List[int] = elementary_axes_lengths
-        self.axis_name2elementary_axis: Dict[str, int] = axis_name2elementary_axis
-        self.input_composition_known_unknown: List[Tuple[List[int], List[int]]] = input_composition_known_unknown
-        self.axes_permutation: List[int] = axes_permutation
+        self.elementary_axes_lengths: list[int] = elementary_axes_lengths
+        self.axis_name2elementary_axis: dict[str, int] = axis_name2elementary_axis
+        self.input_composition_known_unknown: list[tuple[list[int], list[int]]] = input_composition_known_unknown
+        self.axes_permutation: list[int] = axes_permutation
 
         self.first_reduced_axis: int = first_reduced_axis
-        self.added_axes: Dict[int, int] = added_axes
-        self.output_composite_axes: List[List[int]] = output_composite_axes
+        self.added_axes: dict[int, int] = added_axes
+        self.output_composite_axes: list[list[int]] = output_composite_axes
 
 
 def _reconstruct_from_shape_uncached(
-    self: TransformRecipe, shape: List[int], axes_dims: FakeHashableAxesLengths
+    self: TransformRecipe, shape: list[int], axes_dims: FakeHashableAxesLengths
 ) -> CookedRecipe:
     """
     Reconstruct all actual parameters using shape.
@@ -163,7 +176,7 @@ def _reconstruct_from_shape_uncached(
     need_init_reshape = False
 
     # last axis is allocated for collapsed ellipsis
-    axes_lengths: List[int] = list(self.elementary_axes_lengths)
+    axes_lengths: list[int] = list(self.elementary_axes_lengths)
     for axis, dim in axes_dims:
         axes_lengths[self.axis_name2elementary_axis[axis]] = dim
 
@@ -175,8 +188,8 @@ def _reconstruct_from_shape_uncached(
             continue
 
         known_product = 1
-        for axis in known_axes:
-            known_product *= axes_lengths[axis]
+        for axis_len in known_axes:
+            known_product *= axes_lengths[axis_len]
 
         if len(unknown_axes) == 0:
             if isinstance(length, int) and isinstance(known_product, int) and length != known_product:
@@ -196,17 +209,17 @@ def _reconstruct_from_shape_uncached(
     # at this point all axes_lengths are computed (either have values or variables, but not Nones)
 
     # elementary axes are ordered as they appear in input, then all added axes
-    init_shapes: Optional[List[int]] = axes_lengths[: len(self.axes_permutation)] if need_init_reshape else None
+    init_shapes: list[int] | None = axes_lengths[: len(self.axes_permutation)] if need_init_reshape else None
 
     need_final_reshape = False
-    final_shapes: List[int] = []
+    final_shapes: list[int] = []
     for grouping in self.output_composite_axes:
         lengths = [axes_lengths[elementary_axis] for elementary_axis in grouping]
         final_shapes.append(_product(lengths))
         if len(lengths) != 1:
             need_final_reshape = True
 
-    added_axes: Dict[int, int] = {
+    added_axes: dict[int, int] = {
         pos: axes_lengths[pos_in_elementary] for pos, pos_in_elementary in self.added_axes.items()
     }
 
@@ -215,7 +228,7 @@ def _reconstruct_from_shape_uncached(
 
     n_axes_after_adding_axes = len(added_axes) + len(self.axes_permutation)
 
-    axes_reordering: Optional[List[int]] = self.axes_permutation
+    axes_reordering: list[int] | None = self.axes_permutation
     if self.axes_permutation == list(range(len(self.axes_permutation))):
         axes_reordering = None
 
@@ -236,7 +249,12 @@ def _apply_recipe(
         )
     except TypeError:
         # shape or one of passed axes lengths is not hashable (i.e. they are symbols)
-        _result = _reconstruct_from_shape_uncached(recipe, backend.shape(tensor), axes_lengths)
+        _result = _reconstruct_from_shape_uncached(
+            recipe,
+            backend.shape(tensor),
+            axes_lengths,  # type: ignore
+            # ^ known mismatch in types because of torch.jit.script
+        )
         (init_shapes, axes_reordering, reduced_axes, added_axes, final_shapes, n_axes_w_added) = _result
     if init_shapes is not None:
         tensor = backend.reshape(tensor, init_shapes)
@@ -272,7 +290,7 @@ def _apply_recipe_array_api(
             tensor = getattr(xp, reduction_type)(tensor, axis=tuple(reduced_axes))
     if len(added_axes) > 0:
         # we use broadcasting
-        for axis_position, axis_length in added_axes.items():
+        for axis_position, _axis_length in added_axes.items():
             tensor = xp.expand_dims(tensor, axis=axis_position)
 
         final_shape = list(tensor.shape)
@@ -289,7 +307,7 @@ def _apply_recipe_array_api(
 def _prepare_transformation_recipe(
     pattern: str,
     operation: Reduction,
-    axes_names: Tuple[str, ...],
+    axes_names: tuple[str, ...],
     ndim: int,
 ) -> TransformRecipe:
     """Perform initial parsing of pattern and provided supplementary info
@@ -301,31 +319,31 @@ def _prepare_transformation_recipe(
 
     # checking that axes are in agreement - new axes appear only in repeat, while disappear only in reduction
     if not left.has_ellipsis and rght.has_ellipsis:
-        raise EinopsError("Ellipsis found in right side, but not left side of a pattern {}".format(pattern))
+        raise EinopsError(f"Ellipsis found in right side, but not left side of a pattern {pattern}")
     if left.has_ellipsis and left.has_ellipsis_parenthesized:
-        raise EinopsError("Ellipsis inside parenthesis in the left side is not allowed: {}".format(pattern))
+        raise EinopsError(f"Ellipsis inside parenthesis in the left side is not allowed: {pattern}")
     if operation == "rearrange":
         if left.has_non_unitary_anonymous_axes or rght.has_non_unitary_anonymous_axes:
             raise EinopsError("Non-unitary anonymous axes are not supported in rearrange (exception is length 1)")
         difference = set.symmetric_difference(left.identifiers, rght.identifiers)
         if len(difference) > 0:
-            raise EinopsError("Identifiers only on one side of expression (should be on both): {}".format(difference))
+            raise EinopsError(f"Identifiers only on one side of expression (should be on both): {difference}")
     elif operation == "repeat":
         difference = set.difference(left.identifiers, rght.identifiers)
         if len(difference) > 0:
-            raise EinopsError("Unexpected identifiers on the left side of repeat: {}".format(difference))
+            raise EinopsError(f"Unexpected identifiers on the left side of repeat: {difference}")
         axes_without_size = set.difference(
             {ax for ax in rght.identifiers if not isinstance(ax, AnonymousAxis)},
             {*left.identifiers, *axes_names},
         )
         if len(axes_without_size) > 0:
-            raise EinopsError("Specify sizes for new axes in repeat: {}".format(axes_without_size))
+            raise EinopsError(f"Specify sizes for new axes in repeat: {axes_without_size}")
     elif operation in _reductions or callable(operation):
         difference = set.difference(rght.identifiers, left.identifiers)
         if len(difference) > 0:
-            raise EinopsError("Unexpected identifiers on the right side of reduce {}: {}".format(operation, difference))
+            raise EinopsError(f"Unexpected identifiers on the right side of reduce {operation}: {difference}")
     else:
-        raise EinopsError("Unknown reduction {}. Expect one of {}.".format(operation, _reductions))
+        raise EinopsError(f"Unknown reduction {operation}. Expect one of {_reductions}.")
 
     if left.has_ellipsis:
         n_other_dims = len(left.composition) - 1
@@ -333,7 +351,7 @@ def _prepare_transformation_recipe(
             raise EinopsError(f"Wrong shape: expected >={n_other_dims} dims. Received {ndim}-dim tensor.")
         ellipsis_ndim = ndim - n_other_dims
         ell_axes = [_ellipsis + str(i) for i in range(ellipsis_ndim)]
-        left_composition = []
+        left_composition: list[list[str | AnonymousAxis] | _Ellipsis] = []
         for composite_axis in left.composition:
             if composite_axis == _ellipsis:
                 for axis in ell_axes:
@@ -341,7 +359,7 @@ def _prepare_transformation_recipe(
             else:
                 left_composition.append(composite_axis)
 
-        rght_composition = []
+        rght_composition: list[list[str | AnonymousAxis]] = []
         for composite_axis in rght.composition:
             if composite_axis == _ellipsis:
                 for axis in ell_axes:
@@ -349,10 +367,11 @@ def _prepare_transformation_recipe(
             else:
                 group = []
                 for axis in composite_axis:
-                    if axis == _ellipsis:
-                        group.extend(ell_axes)
-                    else:
+                    if axis != _ellipsis:
                         group.append(axis)
+                    else:
+                        group.extend(ell_axes)
+
                 rght_composition.append(group)
 
         left.identifiers.update(ell_axes)
@@ -361,13 +380,15 @@ def _prepare_transformation_recipe(
             rght.identifiers.update(ell_axes)
             rght.identifiers.remove(_ellipsis)
     else:
+        # no ellipsis, case is way simpler
         if ndim != len(left.composition):
             raise EinopsError(f"Wrong shape: expected {len(left.composition)} dims. Received {ndim}-dim tensor.")
         left_composition = left.composition
-        rght_composition = rght.composition
+        rght_composition = rght.composition  # type: ignore
 
-    # parsing all dimensions to find out lengths
-    axis_name2known_length: Dict[Union[str, AnonymousAxis], int] = OrderedDict()
+    # parsing all dimensions to find out lengths.
+    # we use fact that this dict is ordereddict
+    axis_name2known_length: dict[str | AnonymousAxis, int] = {}
     for composite_axis in left_composition:
         for axis_name in composite_axis:
             if isinstance(axis_name, AnonymousAxis):
@@ -393,27 +414,31 @@ def _prepare_transformation_recipe(
         if not ParsedExpression.check_axis_name(elementary_axis):
             raise EinopsError("Invalid name for an axis", elementary_axis)
         if elementary_axis not in axis_name2known_length:
-            raise EinopsError("Axis {} is not used in transform".format(elementary_axis))
+            raise EinopsError(f"Axis {elementary_axis} is not used in transform")
         axis_name2known_length[elementary_axis] = _expected_axis_length
 
     input_axes_known_unknown = []
     # some shapes are inferred later - all information is prepared for faster inference
-    for i, composite_axis in enumerate(left_composition):
-        known: Set[str] = {axis for axis in composite_axis if axis_name2known_length[axis] != _unknown_axis_length}
-        unknown: Set[str] = {axis for axis in composite_axis if axis_name2known_length[axis] == _unknown_axis_length}
+    for composite_axis in left_composition:
+        known: set[str | AnonymousAxis] = {
+            axis for axis in composite_axis if axis_name2known_length[axis] != _unknown_axis_length
+        }
+        unknown: set[str | AnonymousAxis] = {
+            axis for axis in composite_axis if axis_name2known_length[axis] == _unknown_axis_length
+        }
         if len(unknown) > 1:
-            raise EinopsError("Could not infer sizes for {}".format(unknown))
+            raise EinopsError(f"Could not infer sizes for {unknown}")
         assert len(unknown) + len(known) == len(composite_axis)
         input_axes_known_unknown.append(
             ([axis_name2position[axis] for axis in known], [axis_name2position[axis] for axis in unknown])
         )
 
-    axis_position_after_reduction: Dict[str, int] = {}
+    axis_position_after_reduction: dict[str | AnonymousAxis, int] = {}
     for axis_name in itertools.chain(*left_composition):
         if axis_name in rght.identifiers:
             axis_position_after_reduction[axis_name] = len(axis_position_after_reduction)
 
-    result_axes_grouping: List[List[int]] = [
+    result_axes_grouping: list[list[int]] = [
         [axis_name2position[axis] for axis in composite_axis] for i, composite_axis in enumerate(rght_composition)
     ]
 
@@ -442,8 +467,8 @@ def _prepare_transformation_recipe(
 
 
 def _prepare_recipes_for_all_dims(
-    pattern: str, operation: Reduction, axes_names: Tuple[str, ...]
-) -> Dict[int, TransformRecipe]:
+    pattern: str, operation: Reduction, axes_names: tuple[str, ...]
+) -> dict[int, TransformRecipe]:
     """
     Internal function, used in layers.
     Layer makes all recipe creation when it is initialized, thus to keep recipes simple we pre-compute for all dims
@@ -456,31 +481,35 @@ def _prepare_recipes_for_all_dims(
     return {ndim: _prepare_transformation_recipe(pattern, operation, axes_names, ndim=ndim) for ndim in dims}
 
 
-def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reduction, **axes_lengths: int) -> Tensor:
+def reduce(tensor: Tensor | list[Tensor], pattern: str, reduction: Reduction, **axes_lengths: Size) -> Tensor:
     """
-    einops.reduce provides combination of reordering and reduction using reader-friendly notation.
+    einops.reduce combines rearrangement and reduction using reader-friendly notation.
 
-    Examples for reduce operation:
+    Some examples:
 
     ```python
     >>> x = np.random.randn(100, 32, 64)
 
     # perform max-reduction on the first axis
+    # Axis t does not appear on RHS - thus we reduced over t
     >>> y = reduce(x, 't b c -> b c', 'max')
 
-    # same as previous, but with clearer axes meaning
+    # same as previous, but using verbose names for axes
     >>> y = reduce(x, 'time batch channel -> batch channel', 'max')
 
+    # let's pretend now that x is a batch of images
+    # with 4 dims: batch=10, height=20, width=30, channel=40
     >>> x = np.random.randn(10, 20, 30, 40)
 
     # 2d max-pooling with kernel size = 2 * 2 for image processing
     >>> y1 = reduce(x, 'b c (h1 h2) (w1 w2) -> b c h1 w1', 'max', h2=2, w2=2)
 
-    # if one wants to go back to the original height and width, depth-to-space trick can be applied
-    >>> y2 = rearrange(y1, 'b (c h2 w2) h1 w1 -> b c (h1 h2) (w1 w2)', h2=2, w2=2)
-    >>> assert parse_shape(x, 'b _ h w') == parse_shape(y2, 'b _ h w')
+    # same as previous, using anonymous axes,
+    # note: only reduced axes can be anonymous
+    >>> y1 = reduce(x, 'b c (h1 2) (w1 2) -> b c h1 w1', 'max')
 
-    # Adaptive 2d max-pooling to 3 * 4 grid
+    # adaptive 2d max-pooling to 3 * 4 grid,
+    # each element is max of 10x10 tile in the original tensor.
     >>> reduce(x, 'b c (h1 h2) (w1 w2) -> b c h1 w1', 'max', h1=3, w1=4).shape
     (10, 20, 3, 4)
 
@@ -488,21 +517,25 @@ def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reducti
     >>> reduce(x, 'b c h w -> b c', 'mean').shape
     (10, 20)
 
-    # Subtracting mean over batch for each channel
-    >>> y = x - reduce(x, 'b c h w -> () c () ()', 'mean')
+    # subtracting mean over batch for each channel;
+    # similar to x - np.mean(x, axis=(0, 2, 3), keepdims=True)
+    >>> y = x - reduce(x, 'b c h w -> 1 c 1 1', 'mean')
 
     # Subtracting per-image mean for each channel
+    >>> y = x - reduce(x, 'b c h w -> b c 1 1', 'mean')
+
+    # same as previous, but using empty compositions
     >>> y = x - reduce(x, 'b c h w -> b c () ()', 'mean')
 
     ```
 
     Parameters:
-        tensor: tensor: tensor of any supported library (e.g. numpy.ndarray, tensorflow, pytorch).
+        tensor: tensor of any supported library (e.g. numpy.ndarray, tensorflow, pytorch).
             list of tensors is also accepted, those should be of the same type and shape
         pattern: string, reduction pattern
-        reduction: one of available reductions ('min', 'max', 'sum', 'mean', 'prod'), case-sensitive
-            alternatively, a callable f(tensor, reduced_axes) -> tensor can be provided.
-            This allows using various reductions, examples: np.max, tf.reduce_logsumexp, torch.var, etc.
+        reduction: one of available reductions ('min', 'max', 'sum', 'mean', 'prod', 'any', 'all').
+            Alternatively, a callable f(tensor, reduced_axes) -> tensor can be provided.
+            This allows using various reductions like: np.max, np.nanmean, tf.reduce_logsumexp, torch.var, etc.
         axes_lengths: any additional specifications for dimensions
 
     Returns:
@@ -524,22 +557,22 @@ def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reducti
             backend, recipe, cast(Tensor, tensor), reduction_type=reduction, axes_lengths=hashable_axes_lengths
         )
     except EinopsError as e:
-        message = ' Error while processing {}-reduction pattern "{}".'.format(reduction, pattern)
+        message = f' Error while processing {reduction}-reduction pattern "{pattern}".'
         if not isinstance(tensor, list):
-            message += "\n Input tensor shape: {}. ".format(shape)
+            message += f"\n Input tensor shape: {shape}. "
         else:
             message += "\n Input is list. "
-        message += "Additional info: {}.".format(axes_lengths)
-        raise EinopsError(message + "\n {}".format(e))
+        message += f"Additional info: {axes_lengths}."
+        raise EinopsError(message + f"\n {e}") from None
 
 
-def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths) -> Tensor:
+def rearrange(tensor: Tensor | list[Tensor], pattern: str, **axes_lengths: Size) -> Tensor:
     """
     einops.rearrange is a reader-friendly smart element reordering for multidimensional tensors.
     This operation includes functionality of transpose (axes permutation), reshape (view), squeeze, unsqueeze,
     stack, concatenate and other operations.
 
-    Examples for rearrange operation:
+    Examples:
 
     ```python
     # suppose we have a set of 32 images in "h w c" format (height-width-channel)
@@ -549,6 +582,10 @@ def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths)
     >>> rearrange(images, 'b h w c -> b h w c').shape
     (32, 30, 40, 3)
 
+    # stacked and reordered axes to "b c h w" format
+    >>> rearrange(images, 'b h w c -> b c h w').shape
+    (32, 3, 30, 40)
+
     # concatenate images along height (vertical axis), 960 = 32 * 30
     >>> rearrange(images, 'b h w c -> (b h) w c').shape
     (960, 40, 3)
@@ -556,10 +593,6 @@ def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths)
     # concatenated images along horizontal axis, 1280 = 32 * 40
     >>> rearrange(images, 'b h w c -> h (b w) c').shape
     (30, 1280, 3)
-
-    # reordered axes to "b c h w" format for deep learning
-    >>> rearrange(images, 'b h w c -> b c h w').shape
-    (32, 3, 30, 40)
 
     # flattened each image into a vector, 3600 = 30 * 40 * 3
     >>> rearrange(images, 'b h w c -> b (c h w)').shape
@@ -575,7 +608,7 @@ def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths)
 
     ```
 
-    When composing axes, C-order enumeration used (consecutive elements have different last axis)
+    When composing axes, C-order enumeration used (consecutive elements have different last axis).
     Find more examples in einops tutorial.
 
     Parameters:
@@ -591,10 +624,10 @@ def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths)
     return reduce(tensor, pattern, reduction="rearrange", **axes_lengths)
 
 
-def repeat(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths) -> Tensor:
+def repeat(tensor: Tensor | list[Tensor], pattern: str, **axes_lengths: Size) -> Tensor:
     """
     einops.repeat allows reordering elements and repeating them in arbitrary combinations.
-    This operation includes functionality of repeat, tile, broadcast functions.
+    This operation includes functionality of repeat, tile, and broadcast functions.
 
     Examples for repeat operation:
 
@@ -614,18 +647,18 @@ def repeat(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths) ->
     >>> repeat(image, 'h w -> (h2 h) (w3 w)', h2=2, w3=3).shape
     (60, 120)
 
-    # convert each pixel to a small square 2x2. Upsample image by 2x
+    # convert each pixel to a small square 2x2, i.e. upsample an image by 2x
     >>> repeat(image, 'h w -> (h h2) (w w2)', h2=2, w2=2).shape
     (60, 80)
 
-    # pixelate image first by downsampling by 2x, then upsampling
+    # 'pixelate' an image first by downsampling by 2x, then upsampling
     >>> downsampled = reduce(image, '(h h2) (w w2) -> h w', 'mean', h2=2, w2=2)
     >>> repeat(downsampled, 'h w -> (h h2) (w w2)', h2=2, w2=2).shape
     (30, 40)
 
     ```
 
-    When composing axes, C-order enumeration used (consecutive elements have different last axis)
+    When composing axes, C-order enumeration used (consecutive elements have different last axis).
     Find more examples in einops tutorial.
 
     Parameters:
@@ -641,7 +674,7 @@ def repeat(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths) ->
     return reduce(tensor, pattern, reduction="repeat", **axes_lengths)
 
 
-def parse_shape(x, pattern: str) -> dict:
+def parse_shape(x: Tensor, pattern: str) -> dict:
     """
     Parse a tensor shape to dictionary mapping axes names to their lengths.
 
@@ -678,22 +711,23 @@ def parse_shape(x, pattern: str) -> dict:
         else:
             raise RuntimeError(f"Can't parse shape with different number of dimensions: {pattern} {shape}")
     if exp.has_ellipsis:
-        ellipsis_idx = exp.composition.index(_ellipsis)
+        ellipsis_idx = exp.composition.index(_ellipsis)  # type: ignore
         composition = (
             exp.composition[:ellipsis_idx]
-            + ["_"] * (len(shape) - len(exp.composition) + 1)
+            + [["_"]] * (len(shape) - len(exp.composition) + 1)
             + exp.composition[ellipsis_idx + 1 :]
         )
     else:
         composition = exp.composition
     result = {}
-    for axes, axis_length in zip(composition, shape):  # type: ignore
+    for axes, axis_length in zip(composition, shape, strict=True):  # type: ignore
         # axes either [], or [AnonymousAxis] or ['axis_name']
         if len(axes) == 0:
             if axis_length != 1:
                 raise RuntimeError(f"Length of axis is not 1: {pattern} {shape}")
         else:
-            [axis] = axes
+            [axis] = axes  # type: ignore
+            # ^ complains on ellipsis, but ellipsis is replaced
             if isinstance(axis, str):
                 if axis != "_":
                     result[axis] = axis_length
@@ -730,7 +764,7 @@ def _enumerate_directions(x):
 np_ndarray = Any
 
 
-def asnumpy(tensor) -> np_ndarray:
+def asnumpy(tensor: Tensor) -> np_ndarray:
     """
     Convert a tensor of an imperative framework (i.e. numpy/cupy/torch/jax/etc.) to `numpy.ndarray`
 
@@ -829,7 +863,7 @@ def einsum(tensor1: Tensor, tensor2: Tensor, tensor3: Tensor, pattern: str, /) -
 def einsum(tensor1: Tensor, tensor2: Tensor, tensor3: Tensor, tensor4: Tensor, pattern: str, /) -> Tensor: ...
 
 
-def einsum(*tensors_and_pattern: Union[Tensor, str]) -> Tensor:
+def einsum(*tensors_and_pattern: Tensor | str) -> Tensor:
     r"""
     einops.einsum calls einsum operations with einops-style named
     axes indexing, computing tensor products with an arbitrary
@@ -849,8 +883,7 @@ def einsum(*tensors_and_pattern: Union[Tensor, str]) -> Tensor:
     ```
     the following formula is computed:
     ```tex
-    output[a, b, k] =
-        \sum_{c, d, g} x[a, b, c] * y[c, b, d] * z[a, g, k]
+    output[a, b, k] = \sum_{c, d, g} x[a, b, c] * y[c, b, d] * z[a, g, k]
     ```
     where the summation over `c`, `d`, and `g` is performed
     because those axes names do not appear on the right-hand side.

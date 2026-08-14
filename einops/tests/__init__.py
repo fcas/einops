@@ -1,10 +1,14 @@
+"""
+Common utils for testing.
+These functions allow testing only some frameworks, not all.
+"""
+
 import logging
 import os
+import warnings
 from functools import lru_cache
-from typing import List, Tuple
 
 from einops import _backends
-import warnings
 
 __author__ = "Alex Rogozhnikov"
 
@@ -16,7 +20,7 @@ logging.getLogger("matplotlib").disabled = True
 FLOAT_REDUCTIONS = ("min", "max", "sum", "mean", "prod")  # not includes any/all
 
 
-def find_names_of_all_frameworks() -> List[str]:
+def find_names_of_all_frameworks() -> list[str]:
     backend_subclasses = []
     backends = _backends.AbstractBackend.__subclasses__()
     while backends:
@@ -26,14 +30,22 @@ def find_names_of_all_frameworks() -> List[str]:
     return [b.framework_name for b in backend_subclasses]
 
 
-FLAG_NAME = "EINOPS_TEST_BACKENDS"
+ENVVAR_NAME = "EINOPS_TEST_BACKENDS"
+
+
+def unparse_backends(backend_names: list[str]) -> tuple[str, str]:
+    _known_backends = find_names_of_all_frameworks()
+    for backend_name in backend_names:
+        if backend_name not in _known_backends:
+            raise RuntimeError(f"Unknown framework: {backend_name}")
+    return ENVVAR_NAME, ",".join(backend_names)
 
 
 @lru_cache(maxsize=1)
-def parse_backends_to_test() -> List[str]:
-    if FLAG_NAME not in os.environ:
-        raise RuntimeError(f"Testing frameworks were not specified, flag {FLAG_NAME} not set")
-    parsed_backends = os.environ[FLAG_NAME].split(",")
+def parse_backends_to_test() -> list[str]:
+    if ENVVAR_NAME not in os.environ:
+        raise RuntimeError(f"Testing frameworks were not specified, env var {ENVVAR_NAME} not set")
+    parsed_backends = os.environ[ENVVAR_NAME].split(",")
     _known_backends = find_names_of_all_frameworks()
     for backend_name in parsed_backends:
         if backend_name not in _known_backends:
@@ -43,20 +55,13 @@ def parse_backends_to_test() -> List[str]:
 
 
 def is_backend_tested(backend: str) -> bool:
+    """Used to skip test if corresponding backend is not tested"""
     if backend not in find_names_of_all_frameworks():
         raise RuntimeError(f"Unknown framework {backend}")
     return backend in parse_backends_to_test()
 
 
-def unparse_backends(backend_names: List[str]) -> Tuple[str, str]:
-    _known_backends = find_names_of_all_frameworks()
-    for backend_name in backend_names:
-        if backend_name not in _known_backends:
-            raise RuntimeError(f"Unknown framework: {backend_name}")
-    return FLAG_NAME, ",".join(backend_names)
-
-
-def collect_test_backends(symbolic=False, layers=False) -> List[_backends.AbstractBackend]:
+def collect_test_backends(symbolic=False, layers=False) -> list[_backends.AbstractBackend]:
     """
     :param symbolic: symbolic or imperative frameworks?
     :param layers: layers or operations?
@@ -68,7 +73,6 @@ def collect_test_backends(symbolic=False, layers=False) -> List[_backends.Abstra
                 _backends.NumpyBackend,
                 _backends.JaxBackend,
                 _backends.TorchBackend,
-                _backends.ChainerBackend,
                 _backends.TensorflowBackend,
                 _backends.OneFlowBackend,
                 _backends.PaddleBackend,
@@ -77,13 +81,14 @@ def collect_test_backends(symbolic=False, layers=False) -> List[_backends.Abstra
         else:
             backend_types = [
                 _backends.TorchBackend,
-                _backends.ChainerBackend,
                 _backends.OneFlowBackend,
                 _backends.PaddleBackend,
             ]
     else:
         if not layers:
-            backend_types = []
+            backend_types = [
+                _backends.PyTensorBackend,
+            ]
         else:
             backend_types = [
                 _backends.TFKerasBackend,
@@ -99,5 +104,5 @@ def collect_test_backends(symbolic=False, layers=False) -> List[_backends.Abstra
         except ImportError:
             # problem with backend installation fails a specific test function,
             # but will be skipped in all other test cases
-            warnings.warn("backend could not be initialized for tests: {}".format(backend_type))
+            warnings.warn(f"backend could not be initialized for tests: {backend_type}", stacklevel=1)
     return result

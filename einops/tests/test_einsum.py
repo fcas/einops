@@ -1,9 +1,12 @@
-from typing import Any, Callable
-from . import collect_test_backends
-from einops.einops import _compactify_pattern_for_einsum, einsum, EinopsError
+import string
+from collections.abc import Callable
+from typing import Any
+
 import numpy as np
 import pytest
-import string
+
+from einops.einops import EinopsError, _compactify_pattern_for_einsum, einsum
+from einops.tests import collect_test_backends
 
 
 class Arguments:
@@ -43,10 +46,10 @@ test_layer_cases = [
     ),
 ]
 
-
+_Shape = tuple[int, ...]
 # Each of the form:
 # (Arguments, true_einsum_pattern, in_shapes, out_shape)
-test_functional_cases = [
+test_functional_cases: list[tuple[str, str, tuple[_Shape, ...], _Shape]] = [
     (
         # Basic:
         "b c h w, b w -> b h",
@@ -158,20 +161,21 @@ test_functional_cases = [
         # Basic summation:
         "index ->",
         "a->",
-        ((10,)),
-        (()),
+        ((10,),),
+        tuple(),
     ),
 ]
 
 
 def test_layer():
     for backend in collect_test_backends(layers=True, symbolic=False):
-        if backend.framework_name in ["tensorflow", "torch", "chainer", "oneflow", "paddle"]:
+        rng = np.random.default_rng()
+        if backend.framework_name in ["tensorflow", "torch", "oneflow", "paddle"]:
             layer_type = backend.layers().EinMix
             for args, in_shape, out_shape in test_layer_cases:
                 layer = args(layer_type)
                 print("Running", layer.einsum_pattern, "for", backend.framework_name)
-                input = np.random.uniform(size=in_shape).astype("float32")
+                input = rng.uniform(size=in_shape).astype("float32")
                 input_framework = backend.from_numpy(input)
                 output_framework = layer(input_framework)
                 output = backend.to_numpy(output_framework)
@@ -183,11 +187,12 @@ valid_backends_functional = [
     "torch",
     "jax",
     "numpy",
-    "chainer",
     "oneflow",
     "cupy",
     "tensorflow.keras",
     "paddle",
+    "pytensor",
+    "mlx.core",
 ]
 
 
@@ -214,7 +219,7 @@ def test_functional():
                 if do_manual_call:
                     out_array = backend.einsum(predicted_pattern, *in_arrays_framework)
                 else:
-                    out_array = einsum(*in_arrays_framework, einops_pattern)
+                    out_array = einsum(*in_arrays_framework, einops_pattern)  # type: ignore
 
                 # Check shape:
                 if tuple(out_array.shape) != out_shape:
@@ -247,15 +252,15 @@ def test_functional_symbolic():
                 if do_manual_call:
                     predicted_out_symbol = backend.einsum(predicted_pattern, *in_syms)
                 else:
-                    predicted_out_symbol = einsum(*in_syms, einops_pattern)
+                    predicted_out_symbol = einsum(*in_syms, einops_pattern)  # type: ignore
 
                 predicted_out_data = backend.eval_symbol(
                     predicted_out_symbol,
-                    list(zip(in_syms, in_data)),
+                    list(zip(in_syms, in_data, strict=True)),
                 )
                 if predicted_out_data.shape != out_shape:
                     raise ValueError(f"Expected output shape {out_shape} but got {predicted_out_data.shape}")
-                assert np.testing.assert_array_almost_equal(predicted_out_data, expected_out_data, decimal=5)
+                np.testing.assert_array_almost_equal(predicted_out_data, expected_out_data, decimal=5)
 
 
 def test_functional_errors():
@@ -264,24 +269,24 @@ def test_functional_errors():
 
     rstate = np.random.RandomState(0)
 
-    def create_tensor(*shape):
+    def create_tensor(*shape) -> np.ndarray:
         return rstate.uniform(size=shape).astype("float32")
 
     # raise NotImplementedError("Singleton () axes are not yet supported in einsum.")
-    with pytest.raises(NotImplementedError, match="^Singleton"):
+    with pytest.raises(NotImplementedError, match=r"^Singleton"):
         einsum(
             create_tensor(5, 1),
             "i () -> i",
         )
 
     # raise NotImplementedError("Shape rearrangement is not yet supported in einsum.")
-    with pytest.raises(NotImplementedError, match="^Shape rearrangement"):
+    with pytest.raises(NotImplementedError, match=r"^Shape rearrangement"):
         einsum(
             create_tensor(5, 1),
             "a b -> (a b)",
         )
 
-    with pytest.raises(NotImplementedError, match="^Shape rearrangement"):
+    with pytest.raises(NotImplementedError, match=r"^Shape rearrangement"):
         einsum(
             create_tensor(10, 1),
             "(a b) -> a b",
@@ -292,35 +297,35 @@ def test_functional_errors():
     # ^ Not tested, these are just a failsafe in case an unexpected error occurs.
 
     # raise NotImplementedError("Anonymous axes are not yet supported in einsum.")
-    with pytest.raises(NotImplementedError, match="^Anonymous axes"):
+    with pytest.raises(NotImplementedError, match=r"^Anonymous axes"):
         einsum(
             create_tensor(5, 1),
             "i 2 -> i",
         )
 
     # ParsedExpression error:
-    with pytest.raises(EinopsError, match="^Invalid axis identifier"):
+    with pytest.raises(EinopsError, match=r"^Invalid axis identifier"):
         einsum(
             create_tensor(5, 1),
             "i 2j -> i",
         )
 
     # raise ValueError("Einsum pattern must contain '->'.")
-    with pytest.raises(ValueError, match="^Einsum pattern"):
+    with pytest.raises(ValueError, match=r"^Einsum pattern"):
         einsum(
             create_tensor(5, 3, 2),
             "i j k",
         )
 
     # raise RuntimeError("Too many axes in einsum.")
-    with pytest.raises(RuntimeError, match="^Too many axes"):
+    with pytest.raises(RuntimeError, match=r"^Too many axes"):
         einsum(
             create_tensor(1),
             " ".join(string.ascii_letters) + " extra ->",
         )
 
     # raise RuntimeError("Unknown axis on right side of einsum.")
-    with pytest.raises(RuntimeError, match="^Unknown axis"):
+    with pytest.raises(RuntimeError, match=r"^Unknown axis"):
         einsum(
             create_tensor(5, 1),
             "i j -> k",
@@ -330,23 +335,16 @@ def test_functional_errors():
     # "The last argument passed to `einops.einsum` must be a string,"
     # " representing the einsum pattern."
     # )
-    with pytest.raises(ValueError, match="^The last argument"):
-        einsum(
-            "i j k -> i",
-            create_tensor(5, 4, 3),
-        )
+    with pytest.raises(ValueError, match=r"^The last argument"):
+        einsum("i j k -> i", create_tensor(5, 4, 3))  # type: ignore
 
     # raise ValueError(
     #     "`einops.einsum` takes at minimum two arguments: the tensors,"
     #     " followed by the pattern."
     # )
-    with pytest.raises(ValueError, match="^`einops.einsum` takes"):
-        einsum(
-            "i j k -> i",
-        )
-    with pytest.raises(ValueError, match="^`einops.einsum` takes"):
-        einsum(
-            create_tensor(5, 1),
-        )
+    with pytest.raises(ValueError, match=r"^`einops.einsum` takes"):
+        einsum("i j k -> i")  # type: ignore
+    with pytest.raises(ValueError, match=r"^`einops.einsum` takes"):
+        einsum(create_tensor(5, 1))  # type: ignore
 
     # TODO: Include check for giving normal einsum pattern rather than einops.
